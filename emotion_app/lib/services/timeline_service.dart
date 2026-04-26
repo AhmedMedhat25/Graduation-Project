@@ -63,7 +63,7 @@ class TimelineService {
     final token = await _authService.getToken();
     if (token != null) {
       try {
-        final response = await _api.get('/analysis/history', queryParams: {
+        final response = await _api.get('/v2/analysis/history', queryParams: {
           'page': '1',
           'limit': '50',
         });
@@ -111,7 +111,7 @@ class TimelineService {
   // ── Get analysis stats from cloud ─────────────────────────
   Future<Map<String, dynamic>?> getAnalysisStats() async {
     try {
-      final response = await _api.get('/analysis/stats');
+      final response = await _api.get('/v2/analysis/stats');
       if (response.isSuccess && response.body is Map) {
         return response.body as Map<String, dynamic>;
       }
@@ -126,7 +126,7 @@ class TimelineService {
   // ── Delete a specific analysis ────────────────────────────
   Future<bool> deleteAnalysis(int id) async {
     try {
-      final response = await _api.delete('/analysis/$id');
+      final response = await _api.delete('/v2/analysis/$id');
       return response.isSuccess;
     } catch (e) {
       debugPrint('Delete analysis error: $e');
@@ -137,7 +137,7 @@ class TimelineService {
   // ── Clear all analysis history ────────────────────────────
   Future<bool> clearCloudHistory() async {
     try {
-      final response = await _api.delete('/analysis/clear');
+      final response = await _api.delete('/v2/analysis/clear');
       if (response.isSuccess) {
         await clearHistory();
         return true;

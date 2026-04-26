@@ -61,7 +61,7 @@ class EmotionAlert {
         message: j['message'] ?? j['description'] ?? '',
         emotion: j['emotion'] ?? j['dominant_emotion'] ?? '',
         type: _mapSeverityToType(j['severity']),
-        timestamp: DateTime.tryParse(j['created_at'] ?? j['timestamp'] ?? '') ?? DateTime.now(),
+        timestamp: DateTime.tryParse(j['triggered_at'] ?? j['timestamp'] ?? '') ?? DateTime.now(),
         isRead: j['resolved'] == true,
         severity: j['severity'],
         resolved: j['resolved'],

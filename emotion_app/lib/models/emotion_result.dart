@@ -129,34 +129,19 @@ class EmotionResult {
 
   /// Parse a history item from /api/analysis/history
   factory EmotionResult.fromHistoryItem(Map<String, dynamic> item) {
-    final rawEmotion = (item['dominantEmotion'] ?? item['dominant_emotion'])?.toString().toLowerCase().trim();
+    // FIX: API history response uses snake_case fields only
+    // Fields: id, type, dominant_emotion, emotion_category, confidence,
+    //         confidence_percent, summary_text, timestamp
+    final rawEmotion = item['dominant_emotion']?.toString().toLowerCase().trim();
     final emotion = (rawEmotion == null || rawEmotion.isEmpty) ? 'neutral' : rawEmotion;
-    final confidence = ((item['avgConfidence'] ?? item['confidence']) as num? ?? 0.0).toDouble();
+    final confidence = (item['confidence'] as num? ?? 0.0).toDouble();
 
-    // Try to parse all emotions from the response
-    final allEmotions = <String, double>{};
-    final breakdown = item['emotionBreakdown'] ?? item['emotion_breakdown'];
-    if (breakdown is Map) {
-      breakdown.forEach((k, v) {
-        allEmotions[k.toString().toLowerCase()] = (v as num).toDouble();
-      });
-    }
-    if (allEmotions.isEmpty) {
-      allEmotions[emotion] = confidence;
-    }
+    // History endpoint only returns summary — populate allEmotions with what we have
+    final allEmotions = <String, double>{emotion: confidence};
 
-    // Attempt to extract timeline if the backend ever provides it in history
-    final sentencesList = (item['sentencesAnalysis'] ?? item['sentences_analysis']) as List? ?? [];
-    final timelineList = item['timeline'] as List? ?? [];
-    List<Map<String, dynamic>>? parsedTimeline;
-    if (sentencesList.isNotEmpty) {
-      parsedTimeline = sentencesList.map((e) => e as Map<String, dynamic>).toList();
-    } else if (timelineList.isNotEmpty) {
-      parsedTimeline = timelineList.map((e) => e as Map<String, dynamic>).toList();
-    }
-
-    final createdAt = item['createdAt'] ?? item['timestamp'];
-    final inputType = item['inputType'] ?? item['type'];
+    // Timeline is not included in list responses — only in GET /v2/analysis/{id}
+    final createdAt = item['timestamp'];
+    final inputType = item['type'];
 
     return EmotionResult(
       emotion: emotion,
@@ -165,7 +150,7 @@ class EmotionResult {
       timestamp: DateTime.tryParse(createdAt?.toString() ?? '') ?? DateTime.now(),
       type: inputType?.toString().toLowerCase() ?? 'analysis',
       analysisId: item['id'] as int?,
-      timeline: parsedTimeline,
+      timeline: null,
     );
   }
 
