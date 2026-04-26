@@ -1,0 +1,45 @@
+name: emotion_detection
+description: Emotion Detection App with Timeline Analysis
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Networking
+  http: ^1.2.1
+
+  # Local Storage
+  shared_preferences: ^2.2.3
+
+  # Media Pickers
+  image_picker: ^1.1.2
+  file_picker: ^10.3.10
+  record: ^6.0.0
+  path_provider: ^2.1.2
+  permission_handler: ^11.3.1
+
+  # Charts
+  fl_chart: ^1.1.1
+
+  # Utilities
+  intl: ^0.20.2
+  flutter_animate: ^4.5.0
+  percent_indicator: ^4.2.3
+  audioplayers: ^6.0.0
+
+  cupertino_icons: ^1.0.8
+  google_fonts: ^8.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
