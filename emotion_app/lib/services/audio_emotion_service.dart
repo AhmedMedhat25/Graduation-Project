@@ -11,94 +11,89 @@ class AudioEmotionService {
   final _timelineService = TimelineService();
   final _uuid = const Uuid();
 
-  static const List<String> _emotionKeys = [
-    'joy', 'sadness', 'anger', 'fear', 'surprise', 'disgust', 'neutral',
-  ];
-
-  // ── Local Simulation ─────────────────────────────────────
-  Future<EmotionResult> _analyzeLocally(File audioFile) async {
-    await Future.delayed(const Duration(milliseconds: 1500));
-
-    final fileLength = await audioFile.length();
-    final pathHash = audioFile.path.hashCode.abs();
-    final hash = (fileLength + pathHash).abs();
-
-    final scores = <String, double>{};
-    double totalWeight = 0.0;
-
-    for (int i = 0; i < _emotionKeys.length; i++) {
-      final key = _emotionKeys[i];
-      final weight = ((hash + (i * 17)) % 100) / 100.0;
-      scores[key] = weight;
-      totalWeight += weight;
-    }
-
-    if (totalWeight == 0) totalWeight = 1;
-
-    final allEmotions = scores.map((k, v) => MapEntry(k, v / totalWeight));
-    final dominant = allEmotions.entries.reduce((a, b) => a.value > b.value ? a : b);
-
-    return EmotionResult(
-      emotion: dominant.key,
-      confidence: dominant.value.clamp(0.0, 1.0),
-      allEmotions: allEmotions,
-      timestamp: DateTime.now(),
-      type: 'audio',
-    );
-  }
-
-  // ── Main entry point ─────────────────────────────────────
   Future<EmotionResult> analyzeAudio(File audioFile) async {
     final clientId = _uuid.v4();
-    debugPrint('🎵 Analysing audio locally...');
 
-    final localResult = await _analyzeLocally(audioFile);
-    final result = EmotionResult(
-      emotion: localResult.emotion,
-      confidence: localResult.confidence,
-      allEmotions: localResult.allEmotions,
-      timestamp: DateTime.now(),
-      type: 'audio',
-      clientId: clientId,
-    );
+    try {
+      debugPrint('🎵 Sending audio analysis request to API...');
 
-    // Save locally
-    await _timelineService.saveResult(result);
+      // 1. POST request to API
+      final response = await _api.postMultipart(
+        '/analysis/audio',
+        file: audioFile,
+        fileField: 'AudioFile',
+        fields: {
+          'Request': jsonEncode({
+            'client_id': clientId,
+          }),
+        },
+      );
 
-    // Sync to cloud API
-    _syncToCloud(result, audioFile, clientId);
+      if (!response.isSuccess) {
+        throw Exception(response.message);
+      }
 
-    return result;
+      // 2. Fetch the actual analysis result via GET using clientId
+      debugPrint('🎵 Fetching result from API...');
+      
+      // Delay briefly to allow backend processing to complete if it is async
+      await Future.delayed(const Duration(milliseconds: 1500));
+      
+      final getResponse = await _api.get('/analysis/$clientId');
+
+      if (!getResponse.isSuccess || getResponse.body is! Map) {
+        throw Exception('Failed to retrieve analysis result from API');
+      }
+
+      final body = getResponse.body as Map<String, dynamic>;
+      
+      // The GET endpoint returns { "data": { ... } }
+      final resultData = body['data'] is Map<String, dynamic>
+          ? body['data'] as Map<String, dynamic>
+          : body;
+
+      // Pass clientId into rawJson so fromAudioApiV2 can capture it
+      final rawForParsing = <String, dynamic>{
+        ...resultData,
+        'client_id': clientId,
+      };
+
+      final parsed = EmotionResult.fromAudioApiV2(rawForParsing);
+
+      // Extract server-assigned analysisId if present
+      int? analysisId = _safeInt(resultData['id']) ?? _safeInt(body['id']);
+
+      final result = EmotionResult(
+        emotion: parsed.emotion,
+        confidence: parsed.confidence,
+        allEmotions: parsed.allEmotions,
+        timestamp: parsed.timestamp,
+        type: 'audio',
+        analysisId: analysisId ?? parsed.analysisId,
+        clientId: clientId,
+        timeline: parsed.timeline,
+      );
+
+      // Save locally
+      await _timelineService.saveResult(result);
+
+      debugPrint('🎵 Final API Emotion: ${result.emotion}');
+
+      return result;
+    } on SessionExpiredException {
+      rethrow;
+    } catch (e) {
+      debugPrint('🎵 Audio analysis error: $e');
+      throw Exception('Failed to analyze audio via API');
+    }
   }
 
-  void _syncToCloud(EmotionResult result, File audioFile, String clientId) {
-    _api.postMultipart(
-      '/analysis/audio',
-      file: audioFile,
-      fileField: 'AudioFile',
-      fields: {
-        'Request': jsonEncode({
-          'client_id': clientId,
-          'result': {
-            'final_multimodal_emotion': {
-              'label': result.emotion,
-              'confidence': result.confidence,
-              'confidence_percent': result.confidence * 100,
-              'category': 'Natural',
-            },
-            'probabilities': result.allEmotions.entries
-                .map((e) => {
-                      'label': e.key,
-                      'confidence': e.value,
-                      'confidence_percent': e.value * 100,
-                    })
-                .toList(),
-          },
-        }),
-      },
-    ).then((response) {
-      if (response.isSuccess) debugPrint('🎵 Synced to cloud successfully');
-    });
+  static int? _safeInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is double) return v.round();
+    if (v is String) return int.tryParse(v);
+    return null;
   }
 }
 
