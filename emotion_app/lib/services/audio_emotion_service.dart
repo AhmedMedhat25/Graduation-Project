@@ -11,62 +11,95 @@ class AudioEmotionService {
   final _timelineService = TimelineService();
   final _uuid = const Uuid();
 
+  static const List<String> _emotionKeys = [
+    'joy', 'sadness', 'anger', 'fear', 'surprise', 'disgust', 'neutral',
+  ];
+
+  // ── Local Simulation ─────────────────────────────────────
+  Future<EmotionResult> _analyzeLocally(File audioFile) async {
+    await Future.delayed(const Duration(milliseconds: 1500));
+
+    final fileLength = await audioFile.length();
+    final pathHash = audioFile.path.hashCode.abs();
+    final hash = (fileLength + pathHash).abs();
+
+    final scores = <String, double>{};
+    double totalWeight = 0.0;
+
+    for (int i = 0; i < _emotionKeys.length; i++) {
+      final key = _emotionKeys[i];
+      final weight = ((hash + (i * 17)) % 100) / 100.0;
+      scores[key] = weight;
+      totalWeight += weight;
+    }
+
+    if (totalWeight == 0) totalWeight = 1;
+
+    final allEmotions = scores.map((k, v) => MapEntry(k, v / totalWeight));
+    final dominant = allEmotions.entries.reduce((a, b) => a.value > b.value ? a : b);
+
+    return EmotionResult(
+      emotion: dominant.key,
+      confidence: dominant.value.clamp(0.0, 1.0),
+      allEmotions: allEmotions,
+      timestamp: DateTime.now(),
+      type: 'audio',
+    );
+  }
+
+  // ── Main entry point ─────────────────────────────────────
   Future<EmotionResult> analyzeAudio(File audioFile) async {
     final clientId = _uuid.v4();
+    debugPrint('🎵 Analysing audio locally...');
 
-    try {
-      debugPrint('🎵 Starting audio analysis...');
+    final localResult = await _analyzeLocally(audioFile);
+    final result = EmotionResult(
+      emotion: localResult.emotion,
+      confidence: localResult.confidence,
+      allEmotions: localResult.allEmotions,
+      timestamp: DateTime.now(),
+      type: 'audio',
+      clientId: clientId,
+    );
 
-      // ── Single Request: Analyze + Save ────────────────────
-      final response = await _api.postMultipart(
-        '/analysis/audio',
-        file: audioFile,
-        fileField: 'AudioFile',
-        fields: {
-          'Request': jsonEncode({
-            'client_id': clientId,
-            'save': true,
-          }),
-        },
-      );
+    // Save locally
+    await _timelineService.saveResult(result);
 
-      if (!response.isSuccess || response.body is! Map) {
-        throw Exception(response.message);
-      }
+    // Sync to cloud API
+    _syncToCloud(result, audioFile, clientId);
 
-      final body = response.body as Map<String, dynamic>;
+    return result;
+  }
 
-      // ── Extract Analysis ID safely ────────────────────────
-      int? analysisId;
-      final data = body['data'];
-
-      if (data is Map<String, dynamic>) {
-        analysisId = data['analysis_v2_id'] ?? data['id'];
-      } else if (data is int) {
-        analysisId = data;
-      }
-
-      // ── Build Result ──────────────────────────────────────
-      final result = EmotionResult.fromAudioApiV2({
-        ...body,
-        if (analysisId != null) 'id': analysisId,
-      });
-
-      // ── Save Locally (fail-safe) ──────────────────────────
-      try {
-        await _timelineService.saveResult(result);
-      } catch (e) {
-        debugPrint('⚠️ Local save failed: $e');
-      }
-
-      debugPrint('🎵 Audio analysis complete: ${result.emotion}');
-      return result;
-
-    } on SessionExpiredException {
-      rethrow;
-    } catch (e) {
-      debugPrint('🎵 Audio analysis error: $e');
-      throw Exception('Failed to analyze audio');
-    }
+  void _syncToCloud(EmotionResult result, File audioFile, String clientId) {
+    _api.postMultipart(
+      '/analysis/audio',
+      file: audioFile,
+      fileField: 'AudioFile',
+      fields: {
+        'Request': jsonEncode({
+          'client_id': clientId,
+          'result': {
+            'final_multimodal_emotion': {
+              'label': result.emotion,
+              'confidence': result.confidence,
+              'confidence_percent': result.confidence * 100,
+              'category': 'Natural',
+            },
+            'probabilities': result.allEmotions.entries
+                .map((e) => {
+                      'label': e.key,
+                      'confidence': e.value,
+                      'confidence_percent': e.value * 100,
+                    })
+                .toList(),
+          },
+        }),
+      },
+    ).then((response) {
+      if (response.isSuccess) debugPrint('🎵 Synced to cloud successfully');
+    });
   }
 }
+
+

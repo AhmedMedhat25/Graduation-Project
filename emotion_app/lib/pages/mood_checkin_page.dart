@@ -11,17 +11,16 @@ import '../services/timeline_service.dart';
 // ════════════════════════════════════════════════════════════
 class MoodCheckinPage extends StatefulWidget {
   final VoidCallback onComplete;
-  
+
   const MoodCheckinPage({super.key, required this.onComplete});
 
   @override
   State<MoodCheckinPage> createState() => _MoodCheckinPageState();
 
-  // Helper logic to see if we should show it today
+  /// Returns true if the user hasn't checked in today yet.
   static Future<bool> shouldShowToday() async {
     final prefs = await SharedPreferences.getInstance();
     final lastCheckin = prefs.getString('last_mood_checkin');
-    
     final today = DateTime.now().toIso8601String().substring(0, 10);
     return lastCheckin != today;
   }
@@ -29,53 +28,118 @@ class MoodCheckinPage extends StatefulWidget {
 
 class _MoodCheckinPageState extends State<MoodCheckinPage> {
   final _timelineService = TimelineService();
+  final _noteCtrl = TextEditingController();
+
   int? _selectedIndex;
+  bool _saving = false;
 
   final List<Map<String, dynamic>> _moods = [
-    {'emoji': '😊', 'emotion': 'happy', 'label': 'Happy', 'color': const Color(0xFFFFD700)},
-    {'emoji': '😢', 'emotion': 'sad', 'label': 'Sad', 'color': const Color(0xFF4A90D9)},
-    {'emoji': '😠', 'emotion': 'angry', 'label': 'Angry', 'color': const Color(0xFFE53E3E)},
-    {'emoji': '😨', 'emotion': 'fearful', 'label': 'Anxious', 'color': const Color(0xFF9F7AEA)},
-    {'emoji': '😲', 'emotion': 'surprised', 'label': 'Surprised', 'color': const Color(0xFFED8936)},
-    {'emoji': '🤢', 'emotion': 'disgusted', 'label': 'Disgusted', 'color': const Color(0xFF48BB78)},
-    {'emoji': '😐', 'emotion': 'neutral', 'label': 'Neutral', 'color': const Color(0xFF9AA5B4)},
+    {
+      'emoji': '😊',
+      'emotion': 'joy',
+      'label': 'Happy',
+      'color': const Color(0xFFFFD700)
+    },
+    {
+      'emoji': '😢',
+      'emotion': 'sadness',
+      'label': 'Sad',
+      'color': const Color(0xFF4A90D9)
+    },
+    {
+      'emoji': '😠',
+      'emotion': 'anger',
+      'label': 'Angry',
+      'color': const Color(0xFFE53E3E)
+    },
+    {
+      'emoji': '😨',
+      'emotion': 'fear',
+      'label': 'Anxious',
+      'color': const Color(0xFF9F7AEA)
+    },
+    {
+      'emoji': '😲',
+      'emotion': 'surprise',
+      'label': 'Surprised',
+      'color': const Color(0xFFED8936)
+    },
+    {
+      'emoji': '🤢',
+      'emotion': 'disgust',
+      'label': 'Disgusted',
+      'color': const Color(0xFF48BB78)
+    },
+    {
+      'emoji': '😐',
+      'emotion': 'neutral',
+      'label': 'Neutral',
+      'color': const Color(0xFF9AA5B4)
+    },
   ];
 
-  Future<void> _selectMood(String emotion, int index) async {
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_selectedIndex == null) return;
+    if (_saving) return;
+    setState(() => _saving = true);
+
     HapticFeedback.mediumImpact();
-    setState(() => _selectedIndex = index);
 
-    // Small delay for the animation to play
-    await Future.delayed(const Duration(milliseconds: 400));
+    final mood = _moods[_selectedIndex!];
+    final emotion = mood['emotion'] as String;
 
+    // Build confidence map — selected emotion at 1.0, rest zero
+    final allEmotions = <String, double>{
+      for (final m in _moods) m['emotion'] as String: 0.0,
+    };
+    allEmotions[emotion] = 1.0;
+
+    final result = EmotionResult(
+      emotion: emotion,
+      confidence: 1.0,
+      allEmotions: allEmotions,
+      timestamp: DateTime.now(),
+      // Use 'checkin' type — dashboard handles it like any other entry
+      type: 'checkin',
+    );
+
+    // Persist check-in date to suppress today's prompt
     final prefs = await SharedPreferences.getInstance();
     final today = DateTime.now().toIso8601String().substring(0, 10);
     await prefs.setString('last_mood_checkin', today);
 
-    // Save checkin in timeline
-    final result = EmotionResult(
-      emotion: emotion,
-      confidence: 1.0,
-      allEmotions: {emotion: 1.0},
-      timestamp: DateTime.now(),
-      type: 'checkin', // new checkin type
-    );
     await _timelineService.saveResult(result);
 
-    widget.onComplete();
+    if (mounted) widget.onComplete();
+  }
+
+  Future<void> _skip() async {
+    HapticFeedback.lightImpact();
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    await prefs.setString('last_mood_checkin', today);
+    if (mounted) widget.onComplete();
   }
 
   @override
   Widget build(BuildContext context) {
     final hour = DateTime.now().hour;
-    String greeting;
-    if (hour < 12) {
-      greeting = 'Good morning ☀️';
-    } else if (hour < 17) {
-      greeting = 'Good afternoon 🌤️';
-    } else {
-      greeting = 'Good evening 🌙';
-    }
+    final greeting = hour < 12
+        ? 'Good morning ☀️'
+        : hour < 17
+            ? 'Good afternoon 🌤️'
+            : 'Good evening 🌙';
+
+    final selected =
+        _selectedIndex != null ? _moods[_selectedIndex!] : null;
+    final moodColor =
+        selected != null ? selected['color'] as Color : AppColors.primary;
 
     return Scaffold(
       body: Container(
@@ -84,7 +148,7 @@ class _MoodCheckinPageState extends State<MoodCheckinPage> {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              AppColors.primary.withValues(alpha: 0.06),
+              moodColor.withValues(alpha: 0.07),
               AppColors.background,
               AppColors.accent.withValues(alpha: 0.04),
             ],
@@ -93,13 +157,15 @@ class _MoodCheckinPageState extends State<MoodCheckinPage> {
           ),
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: SingleChildScrollView(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Spacer(flex: 1),
+                const SizedBox(height: 16),
 
-                // Greeting
+                // ── Greeting ─────────────────────────────────
                 Text(
                   greeting,
                   style: TextStyle(
@@ -121,16 +187,16 @@ class _MoodCheckinPageState extends State<MoodCheckinPage> {
                   ),
                 ).animate().fadeIn(delay: 200.ms).slideY(begin: -0.2),
 
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
 
                 Text(
                   'How are you feeling right now?',
                   style: TextStyle(fontSize: 16, color: AppColors.textMid),
                 ).animate().fadeIn(delay: 400.ms),
 
-                const SizedBox(height: 48),
+                const SizedBox(height: 40),
 
-                // Mood Grid
+                // ── Mood Grid ────────────────────────────────
                 Wrap(
                   spacing: 14,
                   runSpacing: 14,
@@ -139,84 +205,160 @@ class _MoodCheckinPageState extends State<MoodCheckinPage> {
                     final i = entry.key;
                     final m = entry.value;
                     final isSelected = _selectedIndex == i;
-                    final moodColor = m['color'] as Color;
+                    final color = m['color'] as Color;
 
                     return GestureDetector(
-                      onTap: () => _selectMood(m['emotion'], i),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => _selectedIndex = i);
+                      },
                       child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
+                        duration: const Duration(milliseconds: 280),
                         curve: Curves.easeOutBack,
-                        width: isSelected ? 88 : 82,
-                        height: isSelected ? 88 : 82,
+                        width: isSelected ? 90 : 82,
+                        height: isSelected ? 90 : 82,
                         decoration: BoxDecoration(
                           color: isSelected
-                              ? moodColor.withValues(alpha: 0.12)
+                              ? color.withValues(alpha: 0.13)
                               : AppColors.surface,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                            color: isSelected ? moodColor : AppColors.cardBorder,
+                            color: isSelected
+                                ? color
+                                : AppColors.cardBorder,
                             width: isSelected ? 2.5 : 1,
                           ),
-                          boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color: moodColor.withValues(alpha: 0.25),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 6),
-                                  )
-                                ]
-                              : [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.04),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 3),
-                                  )
-                                ],
+                          boxShadow: [
+                            BoxShadow(
+                              color: isSelected
+                                  ? color.withValues(alpha: 0.28)
+                                  : Colors.black.withValues(alpha: 0.04),
+                              blurRadius: isSelected ? 18 : 8,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
                         ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(m['emoji'],
-                                style: TextStyle(fontSize: isSelected ? 34 : 30)),
+                            Text(
+                              m['emoji'],
+                              style: TextStyle(
+                                  fontSize: isSelected ? 34 : 30),
+                            ),
                             const SizedBox(height: 4),
-                            Text(m['label'],
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w700
-                                        : FontWeight.w600,
-                                    color: isSelected
-                                        ? moodColor
-                                        : AppColors.textMid)),
+                            Text(
+                              m['label'],
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: isSelected
+                                    ? FontWeight.w700
+                                    : FontWeight.w600,
+                                color: isSelected
+                                    ? color
+                                    : AppColors.textMid,
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                    ).animate().fadeIn(delay: (500 + (i * 80)).ms).scale(
+                    )
+                        .animate()
+                        .fadeIn(delay: (500 + i * 70).ms)
+                        .scale(
                           begin: const Offset(0.8, 0.8),
-                          duration: 400.ms,
+                          duration: 380.ms,
                           curve: Curves.easeOutBack,
                         );
                   }).toList(),
                 ),
 
-                const Spacer(flex: 2),
+                // ── Optional note ────────────────────────────
+                if (_selectedIndex != null) ...[
+                  const SizedBox(height: 28),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: moodColor.withValues(alpha: 0.3)),
+                    ),
+                    child: TextField(
+                      controller: _noteCtrl,
+                      maxLines: 2,
+                      maxLength: 200,
+                      style: TextStyle(
+                          fontSize: 14, color: AppColors.textDark),
+                      decoration: InputDecoration(
+                        hintText: 'Add a note (optional)…',
+                        hintStyle:
+                            TextStyle(color: AppColors.textLight, fontSize: 14),
+                        border: InputBorder.none,
+                        isDense: true,
+                        counterStyle:
+                            TextStyle(color: AppColors.textLight, fontSize: 11),
+                      ),
+                    ),
+                  ).animate().fadeIn(delay: 100.ms).slideY(begin: 0.2),
+                ],
 
-                // Skip button
+                const SizedBox(height: 32),
+
+                // ── Log Mood button ──────────────────────────
+                AnimatedOpacity(
+                  opacity: _selectedIndex != null ? 1.0 : 0.35,
+                  duration: const Duration(milliseconds: 250),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _selectedIndex != null && !_saving
+                          ? _save
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: moodColor,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor:
+                            AppColors.primary.withValues(alpha: 0.4),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: _selectedIndex != null ? 4 : 0,
+                      ),
+                      child: _saving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
+                            )
+                          : Text(
+                              _selectedIndex != null
+                                  ? 'Log ${_moods[_selectedIndex!]['label']} Mood'
+                                  : 'Select a mood first',
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w700),
+                            ),
+                    ),
+                  ),
+                ).animate().fadeIn(delay: 800.ms).slideY(begin: 0.2),
+
+                const SizedBox(height: 16),
+
+                // ── Skip button ──────────────────────────────
                 TextButton.icon(
-                  onPressed: () async {
-                    HapticFeedback.lightImpact();
-                    final prefs = await SharedPreferences.getInstance();
-                    final today = DateTime.now().toIso8601String().substring(0, 10);
-                    await prefs.setString('last_mood_checkin', today);
-                    widget.onComplete();
-                  },
+                  onPressed: _skip,
                   icon: Icon(Icons.skip_next_rounded,
                       size: 18, color: AppColors.textLight),
-                  label: Text('Skip for today',
-                      style: TextStyle(
-                          color: AppColors.textLight,
-                          fontWeight: FontWeight.w500)),
-                ).animate().fadeIn(delay: 1200.ms),
+                  label: Text(
+                    'Skip for today',
+                    style: TextStyle(
+                        color: AppColors.textLight,
+                        fontWeight: FontWeight.w500),
+                  ),
+                ).animate().fadeIn(delay: 1000.ms),
+
+                const SizedBox(height: 24),
               ],
             ),
           ),

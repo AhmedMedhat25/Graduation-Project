@@ -54,23 +54,17 @@ class _SplashScreenState extends State<SplashScreen>
     if (isLoggedIn) {
       final shouldCheckin = await MoodCheckinPage.shouldShowToday();
       if (!mounted) return;
+
       if (shouldCheckin) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (_) => MoodCheckinPage(onComplete: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => const HomePage()),
-              );
-            }),
+            // Pass a GlobalKey-safe callback — uses HomePage route directly
+            builder: (_) => MoodCheckinPage(onComplete: _goHome),
           ),
         );
       } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomePage()),
-        );
+        _goHome();
       }
     } else {
       Navigator.pushReplacement(
@@ -79,6 +73,16 @@ class _SplashScreenState extends State<SplashScreen>
       );
     }
   }
+
+  /// Navigates to HomePage, safe to call from any callback context.
+  void _goHome() {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const HomePage()),
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {

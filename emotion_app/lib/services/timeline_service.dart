@@ -59,6 +59,7 @@ class TimelineService {
               DateTime.now(),
           type: json['type'] ?? 'unknown',
           analysisId: json['analysisId'] as int?,
+          clientId: json['clientId']?.toString(), // 🔥 restore UUID
           timeline: parsedTimeline,
         );
       } catch (e) {
@@ -150,10 +151,13 @@ class TimelineService {
   Future<bool> deleteAnalysis(EmotionResult result) async {
     bool canProceed = true;
 
-    if (result.analysisId != null) {
+    // 🔥 FIX: API DELETE endpoint is /analysis/{clientId} (UUID string),
+    // not /analysis/{analysisId} (integer). Use deleteKey helper.
+    final key = result.deleteKey;
+
+    if (key != null) {
       try {
-        final response =
-        await _api.delete('/analysis/${result.analysisId}');
+        final response = await _api.delete('/analysis/$key');
 
         if (!response.isSuccess && response.statusCode != 404) {
           canProceed = false;
@@ -172,9 +176,9 @@ class TimelineService {
     final targetTime = result.timestamp.toIso8601String();
 
     history.removeWhere((r) =>
-    (r.analysisId != null &&
-        result.analysisId != null &&
-        r.analysisId == result.analysisId) ||
+    (r.deleteKey != null &&
+        result.deleteKey != null &&
+        r.deleteKey == result.deleteKey) ||
         (r.timestamp.toIso8601String() == targetTime &&
             r.type == result.type));
 
@@ -217,7 +221,8 @@ class TimelineService {
 
   Future<bool> clearCloudHistory() async {
     try {
-      final response = await _api.delete('/analysis/all');
+      // 🔥 FIX: correct endpoint is /analysis/clear, not /analysis/all
+      final response = await _api.delete('/analysis/clear');
       if (response.isSuccess) {
         await clearHistory();
         return true;
