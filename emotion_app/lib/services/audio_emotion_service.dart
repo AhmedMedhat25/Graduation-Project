@@ -6,71 +6,67 @@ import '../models/emotion_result.dart';
 import 'api_client.dart';
 import 'timeline_service.dart';
 
-// ============================================================
-//  🎵  AUDIO EMOTION SERVICE — Real API Analysis
-// ============================================================
 class AudioEmotionService {
   final _api = ApiClient();
   final _timelineService = TimelineService();
   final _uuid = const Uuid();
 
   Future<EmotionResult> analyzeAudio(File audioFile) async {
+    final clientId = _uuid.v4();
+
     try {
-      // ── Step 1: Run ML analysis ──────────────────────────
-      // FIX: Request field used to send only { client_id }
-      // The ML endpoint only needs the audio file — no extra fields
-      final analysisResponse = await _api.postMultipart(
+      debugPrint('🎵 Starting audio analysis...');
+
+      // ── Single Request: Analyze + Save ────────────────────
+      final response = await _api.postMultipart(
         '/analysis/audio',
-        file: audioFile,
-        fileField: 'AudioFile',
-      );
-
-      debugPrint('🎵 Audio API response: status=${analysisResponse.statusCode}, body=${analysisResponse.body}');
-
-      if (!analysisResponse.isSuccess || analysisResponse.body == null) {
-        throw Exception(analysisResponse.message);
-      }
-
-      final analysisBody = analysisResponse.body as Map<String, dynamic>;
-
-      // ── Step 2: Save to v2 API ───────────────────────────
-      // FIX: was never saving to cloud — history page was always empty
-      final clientId = _uuid.v4();
-      final saveResponse = await _api.postMultipart(
-        '/v2/analysis/audio',
         file: audioFile,
         fileField: 'AudioFile',
         fields: {
           'Request': jsonEncode({
             'client_id': clientId,
-            'result': analysisBody,
+            'save': true,
           }),
         },
       );
 
-      int? analysisId;
-      if (saveResponse.isSuccess && saveResponse.body != null) {
-        analysisId = saveResponse.body['data'] as int?;
-        debugPrint('🎵 Saved to cloud with id=$analysisId');
+      if (!response.isSuccess || response.body is! Map) {
+        throw Exception(response.message);
       }
 
-      // ── Step 3: Parse result ─────────────────────────────
+      final body = response.body as Map<String, dynamic>;
+
+      // ── Extract Analysis ID safely ────────────────────────
+      int? analysisId;
+      final data = body['data'];
+
+      if (data is Map<String, dynamic>) {
+        analysisId = data['analysis_v2_id'] ?? data['id'];
+      } else if (data is int) {
+        analysisId = data;
+      }
+
+      // ── Build Result ──────────────────────────────────────
       final result = EmotionResult.fromAudioApiV2({
-        ...analysisBody,
+        ...body,
         if (analysisId != null) 'id': analysisId,
       });
 
-      // ── Step 4: Save to local timeline ───────────────────
-      await _timelineService.saveResult(result);
+      // ── Save Locally (fail-safe) ──────────────────────────
+      try {
+        await _timelineService.saveResult(result);
+      } catch (e) {
+        debugPrint('⚠️ Local save failed: $e');
+      }
 
+      debugPrint('🎵 Audio analysis complete: ${result.emotion}');
       return result;
 
     } on SessionExpiredException {
       rethrow;
     } catch (e) {
-      if (e is SessionExpiredException) rethrow;
-      debugPrint('Audio analysis error: $e');
-      throw Exception('Failed to analyze audio: $e');
+      debugPrint('🎵 Audio analysis error: $e');
+      throw Exception('Failed to analyze audio');
     }
   }
 }

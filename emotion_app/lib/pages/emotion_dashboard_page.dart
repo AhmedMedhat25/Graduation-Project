@@ -60,6 +60,46 @@ class _EmotionDashboardPageState extends State<EmotionDashboardPage>
     }
   }
 
+  Future<void> _confirmClearHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear All History?'),
+        content: const Text(
+          'This will permanently delete all your analysis records from both the cloud and this device. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete All', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      setState(() => _loading = true);
+      final success = await _timelineService.clearCloudHistory();
+      if (mounted) {
+        setState(() => _loading = false);
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('All history cleared successfully')),
+          );
+          _load();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to clear cloud history. Please try again.')),
+          );
+        }
+      }
+    }
+  }
+
   void _applyFilter() {
     _filteredHistory = _filter == 'all'
         ? _allHistory
@@ -119,6 +159,24 @@ class _EmotionDashboardPageState extends State<EmotionDashboardPage>
             icon: Icon(Icons.refresh_rounded,
                 color: AppColors.textMid, size: 20),
             onPressed: _load,
+          ),
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert_rounded, color: AppColors.textMid),
+            onSelected: (val) {
+              if (val == 'clear') _confirmClearHistory();
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'clear',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_sweep_rounded, color: Colors.red, size: 20),
+                    SizedBox(width: 10),
+                    Text('Clear All History', style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
         bottom: TabBar(
@@ -216,7 +274,26 @@ class _EmotionDashboardPageState extends State<EmotionDashboardPage>
                   child: ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
                     itemCount: _filteredHistory.length,
-                    itemBuilder: (_, i) => TimelineEntryWidget(result: _filteredHistory[i]),
+                    itemBuilder: (_, i) {
+                      final r = _filteredHistory[i];
+                      return TimelineEntryWidget(
+                        result: r,
+                        onDelete: () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final success = await _timelineService.deleteAnalysis(r);
+                              if (!mounted) return;
+                              if (success) {
+                                messenger.showSnackBar(
+                                  const SnackBar(content: Text('Analysis deleted')),
+                                );
+                              } else {
+                                messenger.showSnackBar(
+                                  const SnackBar(content: Text('Failed to delete from cloud')),
+                                );
+                              }
+                            },
+                      );
+                    },
                   ),
                 ),
         ),

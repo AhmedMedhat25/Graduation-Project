@@ -217,7 +217,8 @@ class SectionHeader extends StatelessWidget {
 // ── Timeline Entry Widget ────────────────────────────────────
 class TimelineEntryWidget extends StatelessWidget {
   final EmotionResult result;
-  const TimelineEntryWidget({super.key, required this.result});
+  final VoidCallback? onDelete;
+  const TimelineEntryWidget({super.key, required this.result, this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -229,60 +230,85 @@ class TimelineEntryWidget extends StatelessWidget {
       'video': Icons.videocam_rounded,
     }[result.type] ?? Icons.analytics_rounded;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
+    return GestureDetector(
+      onLongPress: () => _confirmDelete(context),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.cardBorder),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Text(emotionEmoji(result.emotion),
+                    style: const TextStyle(fontSize: 22)),
+              ),
             ),
-            child: Center(
-              child: Text(emotionEmoji(result.emotion),
-                  style: const TextStyle(fontSize: 22)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    result.emotion.toUpperCase(),
+                    style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                        fontSize: 14),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${(result.confidence * 100).toStringAsFixed(0)}% confidence',
+                    style: TextStyle(
+                        fontSize: 12, color: AppColors.textLight),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                Icon(typeIcon, size: 16, color: AppColors.textLight),
+                const SizedBox(height: 4),
                 Text(
-                  result.emotion.toUpperCase(),
+                  _formatTime(result.timestamp),
                   style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: color,
-                      fontSize: 14),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${(result.confidence * 100).toStringAsFixed(0)}% confidence',
-                  style: TextStyle(
-                      fontSize: 12, color: AppColors.textLight),
+                      fontSize: 11, color: AppColors.textLight),
                 ),
               ],
             ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Icon(typeIcon, size: 16, color: AppColors.textLight),
-              const SizedBox(height: 4),
-              Text(
-                _formatTime(result.timestamp),
-                style: TextStyle(
-                    fontSize: 11, color: AppColors.textLight),
-              ),
-            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmDelete(BuildContext context) {
+    if (onDelete == null) return;
+    HapticFeedback.heavyImpact();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Analysis?'),
+        content: const Text('This will remove this record permanently.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onDelete!();
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

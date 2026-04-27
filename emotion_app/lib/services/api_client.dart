@@ -5,153 +5,203 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 
 // ============================================================
-//  🌐  API CLIENT — Centralised HTTP wrapper
+// 🌐 API CLIENT — Centralised HTTP wrapper
 // ============================================================
-/// Single source of truth for every network call in the app.
-///
-/// • Injects `Authorization: Bearer …` when a token exists.
-/// • Returns structured [ApiResponse] with parsed body.
-/// • On 401, clears token and fires [onSessionExpired] so the
-///   UI can navigate to login.
+
 class ApiClient {
   static const String baseUrl = 'https://emotion-detection.runasp.net/api';
   static const String _tokenKey = 'auth_token';
   static const Duration _timeout = Duration(seconds: 30);
 
-  // ── Singleton ────────────────────────────────────────────
   static final ApiClient _instance = ApiClient._();
   factory ApiClient() => _instance;
   ApiClient._();
 
-  // ── Token helpers ────────────────────────────────────────
-  Future<String?> _getToken() async {
+  // ================= TOKEN =================
+
+  Future<String?> getToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_tokenKey);
   }
 
-  /// Clear the stored token (used on logout or 401).
+  Future<void> saveToken(String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, token);
+  }
+
   Future<void> clearToken() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
+    await prefs.remove('user_data');
   }
 
   Future<Map<String, String>> _headers({bool json = true}) async {
-    final token = await _getToken();
+    final token = await getToken();
+
     return {
       if (json) 'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
 
-  // ── Response handler ─────────────────────────────────────
+  // ================= RESPONSE =================
+
   ApiResponse _handle(http.Response response) {
+    debugPrint('📥 Response (${response.statusCode}): ${response.body}');
+
     if (response.statusCode == 401) {
-      // Don't clear the token here — background calls (history, alerts)
-      // catch SessionExpiredException silently and fall back to local.
-      // Clearing the token here would strip it before active operations
-      // (like analysis) get a chance to use it.
-      // The token is overwritten on re-login via AuthService.login().
+      clearToken(); // 🔥 IMPORTANT FIX
       throw SessionExpiredException();
     }
 
     dynamic body;
+
     try {
       body = response.body.isNotEmpty ? jsonDecode(response.body) : null;
     } catch (_) {
       body = response.body;
     }
 
+    bool isSuccess = false;
+
+    if (body is Map) {
+      isSuccess =
+          body['is_success'] == true ||
+              body['isSuccess'] == true ||
+              (response.statusCode >= 200 && response.statusCode < 300);
+    } else {
+      isSuccess = response.statusCode >= 200 && response.statusCode < 300;
+    }
+
     return ApiResponse(
       statusCode: response.statusCode,
       body: body,
-      isSuccess: response.statusCode >= 200 && response.statusCode < 300,
+      isSuccess: isSuccess,
     );
   }
 
-  // ── GET ──────────────────────────────────────────────────
-  Future<ApiResponse> get(String path, {Map<String, String>? queryParams}) async {
-    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: queryParams);
-    debugPrint('🌐 GET $uri');
-    final response = await http.get(uri, headers: await _headers()).timeout(_timeout);
-    return _handle(response);
+  // ================= GET =================
+
+  Future<ApiResponse> get(String path,
+      {Map<String, String>? queryParams}) async {
+    try {
+      final uri =
+      Uri.parse('$baseUrl$path').replace(queryParameters: queryParams);
+
+      debugPrint('🌐 GET $uri');
+
+      final response = await http
+          .get(uri, headers: await _headers())
+          .timeout(_timeout);
+
+      return _handle(response);
+    } catch (e) {
+      return ApiResponse.error(e.toString());
+    }
   }
 
-  // ── POST (JSON) ──────────────────────────────────────────
-  Future<ApiResponse> post(String path, {Map<String, dynamic>? body}) async {
-    final uri = Uri.parse('$baseUrl$path');
-    debugPrint('🌐 POST $uri  body=${body != null ? jsonEncode(body) : "null"}');
-    final response = await http.post(
-      uri,
-      headers: await _headers(),
-      body: body != null ? jsonEncode(body) : null,
-    ).timeout(_timeout);
-    return _handle(response);
+  // ================= POST =================
+
+  Future<ApiResponse> post(String path,
+      {Map<String, dynamic>? body}) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+
+      debugPrint('🌐 POST $uri');
+
+      final response = await http
+          .post(
+        uri,
+        headers: await _headers(),
+        body: body != null ? jsonEncode(body) : null,
+      )
+          .timeout(_timeout);
+
+      return _handle(response);
+    } catch (e) {
+      return ApiResponse.error(e.toString());
+    }
   }
 
-  // ── POST (Multipart) ────────────────────────────────────
+  // ================= MULTIPART =================
+
   Future<ApiResponse> postMultipart(
-    String path, {
-    required File file,
-    required String fileField,
-    Map<String, String>? fields,
-  }) async {
-    final uri = Uri.parse('$baseUrl$path');
-    debugPrint('🌐 POST (multipart) $uri');
-    final request = http.MultipartRequest('POST', uri);
+      String path, {
+        required File file,
+        required String fileField,
+        Map<String, String>? fields,
+      }) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      debugPrint('🌐 POST MULTIPART $uri');
 
-    // Auth header
-    final token = await _getToken();
-    if (token != null) {
-      request.headers['Authorization'] = 'Bearer $token';
+      final request = http.MultipartRequest('POST', uri);
+
+      final token = await getToken();
+      if (token != null && token.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
+
+      request.files.add(await http.MultipartFile.fromPath(fileField, file.path));
+
+      if (fields != null) {
+        request.fields.addAll(fields);
+      }
+
+      final streamed =
+      await request.send().timeout(const Duration(seconds: 60));
+
+      final response = await http.Response.fromStream(streamed);
+
+      return _handle(response);
+    } catch (e) {
+      return ApiResponse.error(e.toString());
     }
+  }
 
-    // File
-    request.files.add(await http.MultipartFile.fromPath(fileField, file.path));
+  // ================= PUT =================
 
-    // Extra fields
-    if (fields != null) {
-      request.fields.addAll(fields);
+  Future<ApiResponse> put(String path,
+      {Map<String, dynamic>? body}) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+
+      final response = await http
+          .put(
+        uri,
+        headers: await _headers(),
+        body: body != null ? jsonEncode(body) : null,
+      )
+          .timeout(_timeout);
+
+      return _handle(response);
+    } catch (e) {
+      return ApiResponse.error(e.toString());
     }
-
-    final streamed = await request.send().timeout(const Duration(seconds: 60));
-    final response = await http.Response.fromStream(streamed);
-    return _handle(response);
   }
 
-  // ── PUT ──────────────────────────────────────────────────
-  Future<ApiResponse> put(String path, {Map<String, dynamic>? body}) async {
-    final uri = Uri.parse('$baseUrl$path');
-    debugPrint('🌐 PUT $uri');
-    final response = await http.put(
-      uri,
-      headers: await _headers(),
-      body: body != null ? jsonEncode(body) : null,
-    ).timeout(_timeout);
-    return _handle(response);
-  }
+  // ================= DELETE =================
 
-  // ── PATCH ────────────────────────────────────────────────
-  Future<ApiResponse> patch(String path, {Map<String, dynamic>? body}) async {
-    final uri = Uri.parse('$baseUrl$path');
-    debugPrint('🌐 PATCH $uri');
-    final response = await http.patch(
-      uri,
-      headers: await _headers(),
-      body: body != null ? jsonEncode(body) : null,
-    ).timeout(_timeout);
-    return _handle(response);
-  }
-
-  // ── DELETE ───────────────────────────────────────────────
   Future<ApiResponse> delete(String path) async {
-    final uri = Uri.parse('$baseUrl$path');
-    debugPrint('🌐 DELETE $uri');
-    final response = await http.delete(uri, headers: await _headers()).timeout(_timeout);
-    return _handle(response);
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+
+      final response = await http
+          .delete(uri, headers: await _headers())
+          .timeout(_timeout);
+
+      return _handle(response);
+    } catch (e) {
+      return ApiResponse.error(e.toString());
+    }
   }
 }
 
-// ── Response model ──────────────────────────────────────────
+// ============================================================
+// RESPONSE MODEL
+// ============================================================
+
 class ApiResponse {
   final int statusCode;
   final dynamic body;
@@ -163,19 +213,46 @@ class ApiResponse {
     required this.isSuccess,
   });
 
-  /// Convenience: extract a message from common response shapes.
+  factory ApiResponse.error(String message) {
+    return ApiResponse(
+      statusCode: 500,
+      body: {'message': message},
+      isSuccess: false,
+    );
+  }
+
+  List<String> get errors {
+    if (body is Map && body['errors'] is List) {
+      return (body['errors'] as List)
+          .map((e) => e.toString())
+          .toList();
+    }
+    return [];
+  }
+
   String get message {
+    final errs = errors;
+    if (errs.isNotEmpty) return errs.first;
+
     if (body is Map) {
-      return (body['message'] ?? body['title'] ?? 'Request failed ($statusCode)').toString();
+      return (body['message'] ??
+          body['title'] ??
+          'Request failed ($statusCode)')
+          .toString();
     }
-    if (body is String && (body as String).isNotEmpty) {
-      return body as String;
+
+    if (body is String && body.isNotEmpty) {
+      return body;
     }
+
     return 'Request failed ($statusCode)';
   }
 }
 
-// ── Session expiry exception ────────────────────────────────
+// ============================================================
+// SESSION EXCEPTION
+// ============================================================
+
 class SessionExpiredException implements Exception {
   @override
   String toString() => 'Session expired. Please log in again.';

@@ -1,65 +1,88 @@
 import 'package:flutter/foundation.dart';
-import 'package:uuid/uuid.dart';
 import '../models/emotion_result.dart';
 import 'api_client.dart';
 import 'timeline_service.dart';
 
-// ============================================================
-//  📝  TEXT EMOTION SERVICE — Real API Analysis
-// ============================================================
 class TextEmotionService {
   final _api = ApiClient();
   final _timelineService = TimelineService();
-  final _uuid = const Uuid();
 
   Future<EmotionResult> analyzeText(String text) async {
     try {
-      // ── Step 1: Run ML analysis ──────────────────────────
-      // FIX: was sending { client_id, result: { text } }
-      // The ML endpoint only takes { "text": "..." }
-      final analysisResponse = await _api.post('/analysis/text', body: {
-        'text': text,
-      });
+      debugPrint('📝 Sending text analysis request...');
 
-      debugPrint('📝 Text API response: status=${analysisResponse.statusCode}, body=${analysisResponse.body}');
+      ApiResponse response;
 
-      if (!analysisResponse.isSuccess || analysisResponse.body == null) {
-        throw Exception(analysisResponse.message);
+      // 🔥 Try standard format
+      try {
+        response = await _api.post('/analysis/text', body: {
+          'text': text,
+        });
+
+        if (!response.isSuccess) {
+          throw Exception('Standard format failed');
+        }
+      } catch (_) {
+        // 🔥 Fallback format
+        debugPrint('📝 Trying fallback format...');
+        response = await _api.post('/analysis/text', body: {
+          'client_id': 'emotra-flutter',
+          'result': {'text': text},
+        });
       }
 
-      final analysisBody = analysisResponse.body as Map<String, dynamic>;
+      // 🔴 Validate response
+      if (response.body is! Map<String, dynamic>) {
+        throw Exception('Invalid response format');
+      }
 
-      // ── Step 2: Save to v2 API ───────────────────────────
-      // FIX: was never saving to cloud — history page was always empty
-      final clientId = _uuid.v4();
-      final saveResponse = await _api.post('/v2/analysis/text', body: {
-        'client_id': clientId,
-        'result': analysisBody,
-      });
+      final body = response.body as Map<String, dynamic>;
 
+      // 🔥 Safe unwrap
+      final resultData =
+      (body['data'] is Map<String, dynamic>)
+          ? body['data']
+          : (body['result'] is Map<String, dynamic>)
+          ? body['result']
+          : body;
+
+      debugPrint('📝 Parsed raw data: $resultData');
+
+      // 🔥 Parse safely using model
+      final parsed = EmotionResult.fromTextApiV2(resultData);
+
+      // 🔥 Extract analysisId if exists
       int? analysisId;
-      if (saveResponse.isSuccess && saveResponse.body != null) {
-        analysisId = saveResponse.body['data'] as int?;
-        debugPrint('📝 Saved to cloud with id=$analysisId');
+
+      if (body['data'] is Map) {
+        final data = body['data'];
+        analysisId = data['analysis_v2_id'] ??
+            data['id'];
+      } else {
+        analysisId = body['id'];
       }
 
-      // ── Step 3: Parse result ─────────────────────────────
-      final result = EmotionResult.fromTextApiV2({
-        ...analysisBody,
-        if (analysisId != null) 'id': analysisId,
-      });
+      final result = EmotionResult(
+        emotion: parsed.emotion,
+        confidence: parsed.confidence,
+        allEmotions: parsed.allEmotions,
+        timestamp: parsed.timestamp,
+        type: 'text',
+        analysisId: analysisId ?? parsed.analysisId,
+        timeline: parsed.timeline,
+      );
 
-      // ── Step 4: Save to local timeline ───────────────────
+      // 🔥 Save locally
       await _timelineService.saveResult(result);
 
-      return result;
+      debugPrint('📝 Final Emotion: ${result.emotion}');
 
+      return result;
     } on SessionExpiredException {
       rethrow;
     } catch (e) {
-      if (e is SessionExpiredException) rethrow;
-      debugPrint('Text analysis error: $e');
-      throw Exception('Failed to analyze text: $e');
+      debugPrint('📝 Text analysis error: $e');
+      throw Exception('Failed to analyze text');
     }
   }
 }

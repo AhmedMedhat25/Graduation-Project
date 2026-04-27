@@ -593,10 +593,21 @@ class _DashboardTabState extends State<_DashboardTab> {
                     ],
                   ).animate().fadeIn(delay: 600.ms),
                   const SizedBox(height: 8),
-                  ..._recentHistory
-                      .asMap()
-                      .entries
-                      .map((e) => TimelineEntryWidget(result: e.value).animate().fadeIn(delay: (700 + (e.key * 100)).ms).slideX()),
+                  ..._recentHistory.asMap().entries.map((e) {
+                    final r = e.value;
+                    return TimelineEntryWidget(
+                      result: r,
+                      onDelete: () async {
+                            final messenger = ScaffoldMessenger.of(context);
+                            final success = await _timelineService.deleteAnalysis(r);
+                            if (mounted && success) {
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('Analysis deleted')),
+                              );
+                            }
+                          },
+                    ).animate().fadeIn(delay: (700 + (e.key * 100)).ms).slideX();
+                  }),
                 ] else ...[
                   Container(
                     padding: const EdgeInsets.all(24),
