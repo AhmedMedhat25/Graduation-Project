@@ -52,6 +52,8 @@ class AppColors {
         return _ocean;
       case 'sunset':
         return _sunset;
+      case 'forest':
+        return _forest;
       default:
         return _light;
     }
@@ -114,6 +116,18 @@ class AppColors {
     textMid: Color(0xFF5D4037),
     textLight: Color(0xFF8D6E63),
     cardBorder: Color(0xFFFFCC80),
+  );
+
+  static const _forest = ThemeColors(
+    primary: Color(0xFF2D6A4F),
+    secondary: Color(0xFF40916C),
+    accent: Color(0xFF1B4332),
+    background: Color(0xFFE9F5E9),
+    surface: Color(0xFFFFFFFF),
+    textDark: Color(0xFF081C15),
+    textMid: Color(0xFF2D6A4F),
+    textLight: Color(0xFF52796F),
+    cardBorder: Color(0xFFB7E4C7),
   );
 }
 

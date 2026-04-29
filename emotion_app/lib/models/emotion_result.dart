@@ -7,10 +7,10 @@ class EmotionResult {
   final DateTime timestamp;
   final String type;
   final int? analysisId;
-  final String? clientId; // UUID used by DELETE /api/analysis/{clientId}
+  final String? clientId;
   final List<Map<String, dynamic>>? timeline;
 
-  EmotionResult({
+  const EmotionResult({
     required this.emotion,
     required this.confidence,
     required this.allEmotions,
@@ -21,227 +21,306 @@ class EmotionResult {
     this.timeline,
   });
 
-  // ── Safe empty fallback ───────────────────────────────────
   factory EmotionResult.empty() => EmotionResult(
-        emotion: 'neutral',
-        confidence: 0.0,
-        allEmotions: {'neutral': 0.0},
-        timestamp: DateTime.now(),
-        type: 'unknown',
-      );
+    emotion: 'neutral',
+    confidence: 0.0,
+    allEmotions: const {'neutral': 0.0},
+    timestamp: DateTime.now(),
+    type: 'unknown',
+  );
 
-  /// Best identifier for DELETE /api/analysis/{clientId}
   String? get deleteKey => clientId ?? analysisId?.toString();
 
-  // ================= BASIC PARSER =================
+  double get confidencePercent => confidence * 100;
 
-  factory EmotionResult.fromJson(Map<String, dynamic> json, String type) {
+  String get displayEmotion =>
+      emotion.isEmpty ? '-' : emotion[0].toUpperCase() + emotion.substring(1);
+
+  List<Map<String, dynamic>> get safeTimeline => timeline ?? const [];
+
+  static DateTime parseCairoTime(dynamic rawTimestamp) {
+    if (rawTimestamp == null || rawTimestamp.toString().isEmpty) {
+      return DateTime.now().toUtc().add(const Duration(hours: 3));
+    }
+    
+    String str = rawTimestamp.toString();
+    // If it looks like a raw datetime without timezone info, force UTC
+    if (!str.endsWith('Z') && str.length == 19) {
+      str += 'Z';
+    }
+    
+    final dt = DateTime.tryParse(str) ?? DateTime.now().toUtc();
+    return dt.toUtc().add(const Duration(hours: 3));
+  }
+
+  factory EmotionResult.fromJson(Map<String, dynamic> json, String fallbackType) {
     return EmotionResult(
       emotion: (json['emotion'] ?? 'neutral').toString().toLowerCase(),
-      confidence: _safeDouble(json['confidence']) ?? 0.0,
-      allEmotions: Map<String, double>.from(
-        (json['all_emotions'] as Map? ?? {}).map(
-          (k, v) => MapEntry(k.toString(), _safeDouble(v) ?? 0.0),
-        ),
+      confidence: _normalizeConfidence(json['confidence']),
+      allEmotions: _parseEmotionMap(
+        json['all_emotions'] ?? json['allEmotions'],
       ),
-      timestamp: DateTime.now(),
-      type: type,
+      timestamp: parseCairoTime(json['timestamp']),
+      type: (json['type'] ?? fallbackType).toString().toLowerCase(),
+      analysisId: _safeInt(json['analysis_id'] ?? json['analysisId'] ?? json['id']),
+      clientId: json['client_id']?.toString() ?? json['clientId']?.toString(),
+      timeline: _parseTimeline(json['timeline']),
     );
   }
 
-  // ================= TEXT API =================
-
-  factory EmotionResult.fromTextApiV2(Map<String, dynamic> rawJson) {
+  factory EmotionResult.fromTextApi(Map<String, dynamic> rawJson) {
     try {
-      // Unwrap nested `result` if present
       final json = rawJson['result'] is Map
           ? Map<String, dynamic>.from(rawJson['result'] as Map)
-          : rawJson;
+          : Map<String, dynamic>.from(rawJson);
 
-      final analysisId = _safeInt(rawJson['id']) ?? _safeInt(json['id']);
-      final clientId =
-          rawJson['client_id']?.toString() ?? json['client_id']?.toString();
+      debugPrint('🧠 Parsing TEXT result: $json');
 
       final allEmotions = <String, double>{};
 
-      // Pull emotion probabilities — try multiple field names
-      final probsRaw = json['combined_results'] ??
-          json['combinedResults'] ??
-          _nestedField(json, 'full_text_analysis', 'probabilities') ??
-          json['probabilities'];
+      _extractEmotions(json['combined_results'], allEmotions);
+      _extractEmotions(_nested(json, 'full_text_analysis', 'probabilities'), allEmotions);
+      _extractEmotions(json['probabilities'], allEmotions);
+      _extractEmotions(json['all_emotions'], allEmotions);
 
-      _extractEmotions(probsRaw, allEmotions);
+      final dominant = _extractDominant(json, [
+        'combined_final_emotion',
+        'dominant',
+        'emotion',
+      ], nested: [
+        ['full_text_analysis', 'dominant']
+      ]);
 
-      // Dominant emotion — safe Map extraction (no `as` cast)
-      final dominantRaw = json['combined_final_emotion'] ??
-          json['combinedFinalEmotion'] ??
-          _nestedField(json, 'full_text_analysis', 'dominant');
+      String emotion = dominant['label'] ?? dominant['emotion'] ?? '';
+      double confidence = _normalizeConfidence(
+        dominant['confidence'] ?? dominant['confidence_percent'],
+      );
 
-      final dominant =
-          dominantRaw is Map ? Map<String, dynamic>.from(dominantRaw) : null;
-
-      String label =
-          (dominant?['label'] ?? dominant?['emotion'] ?? 'neutral')
-              .toString()
-              .toLowerCase();
-
-      // Safe numeric extraction — handles int, double, and percent scale
-      double conf = _safeDouble(dominant?['confidence']) ??
-          _safeDouble(dominant?['confidence_percent']) ??
-          0.0;
-      if (conf > 1.0) conf /= 100.0; // normalise percent → fraction
-
-      // Fallback: derive from allEmotions
-      if (conf == 0.0 && allEmotions.isNotEmpty) {
-        final max =
-            allEmotions.entries.reduce((a, b) => a.value > b.value ? a : b);
-        label = max.key;
-        conf = max.value;
-        if (conf > 1.0) conf /= 100.0;
+      if ((emotion.isEmpty || confidence == 0.0) && allEmotions.isNotEmpty) {
+        final top = allEmotions.entries.reduce((a, b) => a.value >= b.value ? a : b);
+        emotion = top.key;
+        confidence = top.value;
       }
 
-      if (allEmotions.isEmpty) allEmotions[label] = conf;
+      if (emotion.isEmpty) {
+        emotion = (json['emotion'] ?? json['label'] ?? 'neutral').toString().toLowerCase();
+      }
 
-      final timelineList =
-          (json['timeline'] ?? json['sentences_analysis']) as List? ?? [];
+      if (allEmotions.isEmpty) {
+        allEmotions[emotion] = confidence;
+      }
 
       return EmotionResult(
-        emotion: label,
-        confidence: conf,
+        emotion: emotion.isEmpty ? 'neutral' : emotion.toLowerCase(),
+        confidence: confidence,
         allEmotions: allEmotions,
-        timestamp: DateTime.tryParse(
-                (json['timestamp'] ?? json['createdAt'])?.toString() ?? '') ??
-            DateTime.now(),
+        timestamp: parseCairoTime(json['timestamp']),
         type: 'text',
-        analysisId: analysisId,
-        clientId: clientId,
-        timeline: timelineList.whereType<Map<String, dynamic>>().toList()
-            .let((l) => l.isNotEmpty ? l : null),
+        analysisId: _safeInt(rawJson['id']) ?? _safeInt(json['id']),
+        clientId: rawJson['client_id']?.toString() ?? json['client_id']?.toString(),
+        timeline: _parseTimeline(
+          json['sentences_analysis'] ?? json['timeline'],
+        ),
       );
     } catch (e, st) {
       debugPrint('⚠️ Text parsing error: $e\n$st');
-      debugPrint('⚠️ Raw JSON: $rawJson');
+      debugPrint('⚠️ Raw TEXT JSON: $rawJson');
       return EmotionResult.empty();
     }
   }
 
-  // ================= AUDIO API =================
-
-  factory EmotionResult.fromAudioApiV2(Map<String, dynamic> rawJson) {
+  factory EmotionResult.fromAudioApi(Map<String, dynamic> rawJson) {
     try {
       final json = rawJson['result'] is Map
           ? Map<String, dynamic>.from(rawJson['result'] as Map)
-          : rawJson;
+          : Map<String, dynamic>.from(rawJson);
 
-      final analysisId = _safeInt(rawJson['id']) ?? _safeInt(json['id']);
-      final clientId =
-          rawJson['client_id']?.toString() ?? json['client_id']?.toString();
+      debugPrint('🧠 Parsing AUDIO result: $json');
+
+      final audioEmotion = json['audio_emotion'] is Map
+          ? Map<String, dynamic>.from(json['audio_emotion'] as Map)
+          : null;
 
       final allEmotions = <String, double>{};
 
-      final combined = json['final_multimodal_results'] ??
-          json['combined_results'] ??
-          json['probabilities'];
+      _extractEmotions(json['final_multimodal_results'], allEmotions);
+      _extractEmotions(json['combined_results'], allEmotions);
+      _extractEmotions(json['probabilities'], allEmotions);
+      _extractEmotions(json['all_emotions'], allEmotions);
+      _extractEmotions(audioEmotion?['probabilities'], allEmotions);
 
-      _extractEmotions(combined, allEmotions);
+      final dominant = _extractDominant(json, [
+        'final_multimodal_emotion',
+        'combined_final_emotion',
+        'dominant',
+        'emotion',
+      ], nested: [
+        ['audio_emotion', 'dominant']
+      ]);
 
-      // Dominant — multiple field names
-      final dominantRaw = json['final_multimodal_emotion'] ??
-          json['dominant'] ??
-          json['combined_final_emotion'];
+      String emotion = dominant['label'] ?? dominant['emotion'] ?? '';
+      double confidence = _normalizeConfidence(
+        dominant['confidence'] ?? dominant['confidence_percent'],
+      );
 
-      final dominant =
-          dominantRaw is Map ? Map<String, dynamic>.from(dominantRaw) : null;
-
-      String label =
-          (dominant?['label'] ?? dominant?['emotion'] ?? 'neutral')
-              .toString()
-              .toLowerCase();
-
-      double conf = _safeDouble(dominant?['confidence']) ??
-          _safeDouble(dominant?['confidence_percent']) ??
-          0.0;
-      if (conf > 1.0) conf /= 100.0;
-
-      if (conf == 0.0 && allEmotions.isNotEmpty) {
-        final max =
-            allEmotions.entries.reduce((a, b) => a.value > b.value ? a : b);
-        label = max.key;
-        conf = max.value;
-        if (conf > 1.0) conf /= 100.0;
+      if ((emotion.isEmpty || confidence == 0.0) && allEmotions.isNotEmpty) {
+        final top = allEmotions.entries.reduce((a, b) => a.value >= b.value ? a : b);
+        emotion = top.key;
+        confidence = top.value;
       }
 
-      if (allEmotions.isEmpty) allEmotions[label] = conf;
+      if (emotion.isEmpty) {
+        emotion = (json['emotion'] ?? json['label'] ?? 'neutral').toString().toLowerCase();
+      }
 
-      final timelineList =
-          (json['timeline'] ?? json['segments']) as List? ?? [];
+      if (allEmotions.isEmpty) {
+        allEmotions[emotion] = confidence;
+      }
 
       return EmotionResult(
-        emotion: label,
-        confidence: conf,
+        emotion: emotion.isEmpty ? 'neutral' : emotion.toLowerCase(),
+        confidence: confidence,
         allEmotions: allEmotions,
-        timestamp: DateTime.tryParse(
-                (json['timestamp'] ?? json['createdAt'])?.toString() ?? '') ??
-            DateTime.now(),
+        timestamp: parseCairoTime(json['timestamp']),
         type: 'audio',
-        analysisId: analysisId,
-        clientId: clientId,
-        timeline: timelineList.whereType<Map<String, dynamic>>().toList()
-            .let((l) => l.isNotEmpty ? l : null),
+        analysisId: _safeInt(rawJson['id']) ?? _safeInt(json['id']),
+        clientId: rawJson['client_id']?.toString() ?? json['client_id']?.toString(),
+        timeline: _parseTimeline(
+          audioEmotion?['timeline'] ?? json['timeline'],
+        ),
       );
     } catch (e, st) {
       debugPrint('⚠️ Audio parsing error: $e\n$st');
-      debugPrint('⚠️ Raw JSON: $rawJson');
+      debugPrint('⚠️ Raw AUDIO JSON: $rawJson');
       return EmotionResult.empty();
     }
   }
-
-  // ================= HISTORY =================
 
   factory EmotionResult.fromHistoryItem(Map<String, dynamic> item) {
     try {
-      final data = item['result'] is Map
-          ? Map<String, dynamic>.from(item['result'] as Map)
-          : item;
+      debugPrint('📋 History item keys: ${item.keys.toList()}');
 
-      final type = item['type']?.toString().toLowerCase() ?? 'text';
+      // --- Extract emotion label ---
+      String emotion = '';
 
-      final fullData = <String, dynamic>{
-        ...data,
-        'id': item['id'],
-        if (item['client_id'] != null) 'client_id': item['client_id'],
-        'timestamp': item['triggered_at'] ??
-            item['timestamp'] ??
-            data['timestamp'],
-      };
+      // Direct field names
+      final rawEmotion = item['dominant_emotion'] ??
+          item['emotion'] ??
+          item['label'];
 
-      return type == 'audio'
-          ? EmotionResult.fromAudioApiV2(fullData)
-          : EmotionResult.fromTextApiV2(fullData);
+      if (rawEmotion is String && rawEmotion.isNotEmpty) {
+        emotion = rawEmotion.toLowerCase();
+      }
+
+      // Try nested dominant object
+      if (emotion.isEmpty && item['dominant'] is Map) {
+        final dom = item['dominant'] as Map;
+        emotion = (dom['label'] ?? dom['emotion'] ?? '').toString().toLowerCase();
+      }
+
+      // Try nested result object
+      if (emotion.isEmpty && item['result'] is Map) {
+        final res = item['result'] as Map;
+        final cfe = res['combined_final_emotion'];
+        if (cfe is Map) {
+          emotion = (cfe['label'] ?? '').toString().toLowerCase();
+        }
+        if (emotion.isEmpty) {
+          final dom = res['dominant'];
+          if (dom is Map) {
+            emotion = (dom['label'] ?? '').toString().toLowerCase();
+          }
+        }
+        if (emotion.isEmpty) {
+          emotion = (res['emotion'] ?? res['label'] ?? '').toString().toLowerCase();
+        }
+      }
+
+      if (emotion.isEmpty) emotion = 'neutral';
+
+      // --- Extract confidence ---
+      double confidence = _normalizeConfidence(
+        item['confidence'] ?? item['confidence_percent'] ?? item['score'],
+      );
+
+      // Try nested dominant
+      if (confidence == 0.0 && item['dominant'] is Map) {
+        confidence = _normalizeConfidence(
+          (item['dominant'] as Map)['confidence'] ??
+          (item['dominant'] as Map)['confidence_percent'],
+        );
+      }
+
+      // Try nested result
+      if (confidence == 0.0 && item['result'] is Map) {
+        final res = item['result'] as Map;
+        final cfe = res['combined_final_emotion'];
+        if (cfe is Map) {
+          confidence = _normalizeConfidence(
+            cfe['confidence'] ?? cfe['confidence_percent'],
+          );
+        }
+      }
+
+      debugPrint('📋 Parsed history → emotion: $emotion, confidence: $confidence');
+
+      return EmotionResult(
+        emotion: emotion,
+        confidence: confidence,
+        allEmotions: {emotion: confidence},
+        timestamp: parseCairoTime(item['timestamp']),
+        type: (item['type'] ?? 'text').toString().toLowerCase(),
+        analysisId: _safeInt(item['id']),
+        clientId: item['client_id']?.toString(),
+      );
     } catch (e, st) {
-      debugPrint('⚠️ History parse error: $e\n$st');
+      debugPrint('⚠️ History parsing error: $e\n$st');
       return EmotionResult.empty();
     }
   }
 
-  // ================= JSON =================
-
   Map<String, dynamic> toJson() => {
-        'emotion': emotion,
-        'confidence': confidence,
-        'allEmotions': allEmotions,
-        'timestamp': timestamp.toIso8601String(),
-        'type': type,
-        if (analysisId != null) 'analysisId': analysisId,
-        if (clientId != null) 'clientId': clientId,
-        if (timeline != null) 'timeline': timeline,
-      };
+    'emotion': emotion,
+    'confidence': confidence,
+    'all_emotions': allEmotions,
+    'timestamp': timestamp.toIso8601String(),
+    'type': type,
+    if (analysisId != null) 'analysis_id': analysisId,
+    if (clientId != null) 'client_id': clientId,
+    if (timeline != null) 'timeline': timeline,
+  };
 
-  // ============================================================
-  // PRIVATE SAFE-CAST HELPERS
-  // ============================================================
+  static Map<String, dynamic> _extractDominant(
+      Map<String, dynamic> json,
+      List<String> directKeys, {
+        List<List<String>> nested = const [],
+      }) {
+    for (final key in directKeys) {
+      final value = json[key];
+      if (value is Map) {
+        return Map<String, dynamic>.from(value);
+      }
+      if (value is String) {
+        return {'label': value};
+      }
+    }
 
-  /// Safely converts any value to double — never throws.
+    for (final pair in nested) {
+      if (pair.length != 2) continue;
+      final parent = json[pair[0]];
+      if (parent is Map && parent[pair[1]] is Map) {
+        return Map<String, dynamic>.from(parent[pair[1]]);
+      }
+    }
+
+    return {};
+  }
+
+  static double _normalizeConfidence(dynamic value) {
+    final v = _safeDouble(value) ?? 0.0;
+    return v > 1.0 ? v / 100.0 : v;
+  }
+
   static double? _safeDouble(dynamic v) {
     if (v == null) return null;
     if (v is double) return v;
@@ -250,7 +329,6 @@ class EmotionResult {
     return null;
   }
 
-  /// Safely converts any value to int — never throws.
   static int? _safeInt(dynamic v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -259,50 +337,54 @@ class EmotionResult {
     return null;
   }
 
-  /// Reads a nested field from a map without throwing.
-  static dynamic _nestedField(Map json, String outer, String inner) {
-    final o = json[outer];
-    if (o is Map) return o[inner];
+  static dynamic _nested(Map<String, dynamic> json, String outer, String inner) {
+    final outerValue = json[outer];
+    if (outerValue is Map) return outerValue[inner];
     return null;
   }
 
-  /// Populates [out] from a List or Map of emotion values.
-  /// Handles both `[{label, confidence}]` list and `{emotion: value}` map.
+  static Map<String, double> _parseEmotionMap(dynamic raw) {
+    final result = <String, double>{};
+    if (raw is Map) {
+      raw.forEach((key, value) {
+        result[key.toString().toLowerCase()] = _normalizeConfidence(value);
+      });
+    }
+    return result;
+  }
+
+  static List<Map<String, dynamic>>? _parseTimeline(dynamic raw) {
+    if (raw is! List) return null;
+
+    final list = raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    return list.isEmpty ? null : list;
+  }
+
   static void _extractEmotions(dynamic raw, Map<String, double> out) {
     if (raw is List) {
       for (final item in raw) {
         if (item is! Map) continue;
+
+        final map = Map<String, dynamic>.from(item);
         final label =
-            (item['label'] ?? item['emotion'] ?? '').toString().toLowerCase();
-        // item['score'] read safely — no `as` cast
-        final conf = _safeDouble(item['confidence']) ??
-            _safeDouble(item['score']) ??
-            _safeDouble(item['confidence_percent']) ??
-            0.0;
-        if (label.isNotEmpty) {
-          out[label] = conf > 1.0 ? conf / 100.0 : conf;
-        }
+        (map['label'] ?? map['emotion'] ?? '').toString().toLowerCase();
+        if (label.isEmpty) continue;
+
+        out[label] = _normalizeConfidence(
+          map['confidence'] ?? map['score'] ?? map['confidence_percent'],
+        );
       }
     } else if (raw is Map) {
-      raw.forEach((k, v) {
-        final conf = _safeDouble(v) ?? 0.0;
-        out[k.toString().toLowerCase()] = conf > 1.0 ? conf / 100.0 : conf;
+      raw.forEach((key, value) {
+        out[key.toString().toLowerCase()] = _normalizeConfidence(value);
       });
     }
   }
 }
-
-// ============================================================
-// LIST EXTENSION — .let() helper
-// ============================================================
-
-extension _LetExt<T> on T {
-  R let<R>(R Function(T) f) => f(this);
-}
-
-// ============================================================
-// USER MODEL
-// ============================================================
 
 class UserModel {
   final String id;
@@ -311,7 +393,7 @@ class UserModel {
   final String? avatarUrl;
   final DateTime createdAt;
 
-  UserModel({
+  const UserModel({
     required this.id,
     required this.name,
     required this.email,
@@ -320,15 +402,26 @@ class UserModel {
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
+    final firstName = json['firstName']?.toString();
+    final lastName = json['lastName']?.toString();
+
+    final combinedName = [
+      if (firstName != null && firstName.isNotEmpty) firstName,
+      if (lastName != null && lastName.isNotEmpty) lastName,
+    ].join(' ');
+
     return UserModel(
-      id: (json['user_id'] ?? json['id'])?.toString() ?? '',
-      name: json['full_name']?.toString() ??
-          json['name']?.toString() ??
-          'Unknown',
-      email: json['email'] ?? '',
-      avatarUrl: json['avatar_url'],
-      createdAt:
-          DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
+      id: (json['user_id'] ?? json['id'] ?? '').toString(),
+      name: (json['name']?.toString().isNotEmpty == true
+          ? json['name'].toString()
+          : combinedName.isNotEmpty
+          ? combinedName
+          : 'Unknown')
+          .trim(),
+      email: json['email']?.toString() ?? '',
+      avatarUrl: json['avatar_url']?.toString(),
+      createdAt: DateTime.tryParse((json['created_at'] ?? '').toString()) ??
+          DateTime.now(),
     );
   }
 }

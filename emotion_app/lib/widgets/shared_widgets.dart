@@ -316,8 +316,11 @@ class TimelineEntryWidget extends StatelessWidget {
   }
 
   String _formatTime(DateTime dt) {
-    final now = DateTime.now();
+    // Current time in Cairo (UTC+3)
+    final now = DateTime.now().toUtc().add(const Duration(hours: 3));
     final diff = now.difference(dt);
+    
+    if (diff.isNegative) return 'just now';
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';

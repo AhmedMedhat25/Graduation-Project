@@ -1,23 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
-
-// ============================================================
-// 🌐 API CLIENT — Centralised HTTP wrapper
-// ============================================================
 
 class ApiClient {
   static const String baseUrl = 'https://emotion-detection.runasp.net/api';
+
   static const String _tokenKey = 'auth_token';
-  static const Duration _timeout = Duration(seconds: 30);
+  static const Duration _timeout = Duration(seconds: 45);
+  static const Duration _multipartTimeout = Duration(seconds: 90);
 
   static final ApiClient _instance = ApiClient._();
   factory ApiClient() => _instance;
   ApiClient._();
-
-  // ================= TOKEN =================
 
   Future<String?> getToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -45,70 +42,59 @@ class ApiClient {
     };
   }
 
-  // ================= RESPONSE =================
-
-  ApiResponse _handle(http.Response response) {
-    debugPrint('📥 Response (${response.statusCode}): ${response.body}');
+  ApiResponse _handle(http.Response response, Uri uri) {
+    debugPrint('📥 [API] ${response.statusCode} -> $uri');
+    debugPrint('📥 [API] Body: ${response.body}');
 
     if (response.statusCode == 401) {
-      clearToken(); // 🔥 IMPORTANT FIX
+      clearToken();
       throw SessionExpiredException();
     }
 
     dynamic body;
-
     try {
       body = response.body.isNotEmpty ? jsonDecode(response.body) : null;
     } catch (_) {
       body = response.body;
     }
 
-    bool isSuccess = false;
-
-    if (body is Map) {
-      isSuccess =
-          body['is_success'] == true ||
-              body['isSuccess'] == true ||
-              (response.statusCode >= 200 && response.statusCode < 300);
-    } else {
-      isSuccess = response.statusCode >= 200 && response.statusCode < 300;
-    }
-
     return ApiResponse(
       statusCode: response.statusCode,
       body: body,
-      isSuccess: isSuccess,
+      isSuccess: response.statusCode >= 200 && response.statusCode < 300,
     );
   }
 
-  // ================= GET =================
-
-  Future<ApiResponse> get(String path,
-      {Map<String, String>? queryParams}) async {
+  Future<ApiResponse> get(
+      String path, {
+        Map<String, String>? queryParams,
+      }) async {
     try {
-      final uri =
-      Uri.parse('$baseUrl$path').replace(queryParameters: queryParams);
+      final uri = Uri.parse('$baseUrl$path').replace(queryParameters: queryParams);
+      debugPrint('🚀 GET: $uri');
 
-      debugPrint('🌐 GET $uri');
+      final response =
+      await http.get(uri, headers: await _headers()).timeout(_timeout);
 
-      final response = await http
-          .get(uri, headers: await _headers())
-          .timeout(_timeout);
-
-      return _handle(response);
+      return _handle(response, uri);
+    } on SessionExpiredException {
+      rethrow;
     } catch (e) {
+      debugPrint('❌ API Error (GET): $e');
       return ApiResponse.error(e.toString());
     }
   }
 
-  // ================= POST =================
-
-  Future<ApiResponse> post(String path,
-      {Map<String, dynamic>? body}) async {
+  Future<ApiResponse> post(
+      String path, {
+        Map<String, dynamic>? body,
+      }) async {
     try {
       final uri = Uri.parse('$baseUrl$path');
-
-      debugPrint('🌐 POST $uri');
+      debugPrint('🚀 POST: $uri');
+      if (body != null) {
+        debugPrint('📤 POST Body: ${jsonEncode(body)}');
+      }
 
       final response = await http
           .post(
@@ -118,23 +104,30 @@ class ApiClient {
       )
           .timeout(_timeout);
 
-      return _handle(response);
+      return _handle(response, uri);
+    } on SessionExpiredException {
+      rethrow;
     } catch (e) {
+      debugPrint('❌ API Error (POST): $e');
       return ApiResponse.error(e.toString());
     }
   }
-
-  // ================= MULTIPART =================
 
   Future<ApiResponse> postMultipart(
       String path, {
         required File file,
         required String fileField,
         Map<String, String>? fields,
+        Duration? timeout,
       }) async {
     try {
       final uri = Uri.parse('$baseUrl$path');
-      debugPrint('🌐 POST MULTIPART $uri');
+      debugPrint('🚀 MULTIPART POST: $uri');
+      debugPrint('📤 File: ${file.path}');
+      debugPrint('📤 File field: $fileField');
+      if (fields != null) {
+        debugPrint('📤 Fields: $fields');
+      }
 
       final request = http.MultipartRequest('POST', uri);
 
@@ -142,30 +135,40 @@ class ApiClient {
       if (token != null && token.isNotEmpty) {
         request.headers['Authorization'] = 'Bearer $token';
       }
+      request.headers['Accept'] = 'application/json';
 
-      request.files.add(await http.MultipartFile.fromPath(fileField, file.path));
+      request.files.add(
+        await http.MultipartFile.fromPath(fileField, file.path),
+      );
 
-      if (fields != null) {
+      if (fields != null && fields.isNotEmpty) {
         request.fields.addAll(fields);
       }
 
-      final streamed =
-      await request.send().timeout(const Duration(seconds: 60));
+      final streamed = await request
+          .send()
+          .timeout(timeout ?? _multipartTimeout);
 
       final response = await http.Response.fromStream(streamed);
-
-      return _handle(response);
+      return _handle(response, uri);
+    } on SessionExpiredException {
+      rethrow;
     } catch (e) {
+      debugPrint('❌ API Error (MULTIPART): $e');
       return ApiResponse.error(e.toString());
     }
   }
 
-  // ================= PUT =================
-
-  Future<ApiResponse> put(String path,
-      {Map<String, dynamic>? body}) async {
+  Future<ApiResponse> put(
+      String path, {
+        Map<String, dynamic>? body,
+      }) async {
     try {
       final uri = Uri.parse('$baseUrl$path');
+      debugPrint('🚀 PUT: $uri');
+      if (body != null) {
+        debugPrint('📤 PUT Body: ${jsonEncode(body)}');
+      }
 
       final response = await http
           .put(
@@ -175,32 +178,32 @@ class ApiClient {
       )
           .timeout(_timeout);
 
-      return _handle(response);
+      return _handle(response, uri);
+    } on SessionExpiredException {
+      rethrow;
     } catch (e) {
+      debugPrint('❌ API Error (PUT): $e');
       return ApiResponse.error(e.toString());
     }
   }
-
-  // ================= DELETE =================
 
   Future<ApiResponse> delete(String path) async {
     try {
       final uri = Uri.parse('$baseUrl$path');
+      debugPrint('🚀 DELETE: $uri');
 
-      final response = await http
-          .delete(uri, headers: await _headers())
-          .timeout(_timeout);
+      final response =
+      await http.delete(uri, headers: await _headers()).timeout(_timeout);
 
-      return _handle(response);
+      return _handle(response, uri);
+    } on SessionExpiredException {
+      rethrow;
     } catch (e) {
+      debugPrint('❌ API Error (DELETE): $e');
       return ApiResponse.error(e.toString());
     }
   }
 }
-
-// ============================================================
-// RESPONSE MODEL
-// ============================================================
 
 class ApiResponse {
   final int statusCode;
@@ -215,18 +218,32 @@ class ApiResponse {
 
   factory ApiResponse.error(String message) {
     return ApiResponse(
-      statusCode: 500,
+      statusCode: 0,
       body: {'message': message},
       isSuccess: false,
     );
   }
 
+  dynamic get data => body is Map ? body['data'] : null;
+
   List<String> get errors {
     if (body is Map && body['errors'] is List) {
-      return (body['errors'] as List)
-          .map((e) => e.toString())
-          .toList();
+      return (body['errors'] as List).map((e) => e.toString()).toList();
     }
+
+    if (body is Map && body['errors'] is Map) {
+      final map = body['errors'] as Map;
+      final list = <String>[];
+      for (final value in map.values) {
+        if (value is List) {
+          list.addAll(value.map((e) => e.toString()));
+        } else {
+          list.add(value.toString());
+        }
+      }
+      return list;
+    }
+
     return [];
   }
 
@@ -235,23 +252,17 @@ class ApiResponse {
     if (errs.isNotEmpty) return errs.first;
 
     if (body is Map) {
-      return (body['message'] ??
-          body['title'] ??
-          'Request failed ($statusCode)')
+      return (body['message'] ?? body['title'] ?? 'Request failed ($statusCode)')
           .toString();
     }
 
-    if (body is String && body.isNotEmpty) {
-      return body;
+    if (body is String && (body as String).isNotEmpty) {
+      return body as String;
     }
 
     return 'Request failed ($statusCode)';
   }
 }
-
-// ============================================================
-// SESSION EXCEPTION
-// ============================================================
 
 class SessionExpiredException implements Exception {
   @override
