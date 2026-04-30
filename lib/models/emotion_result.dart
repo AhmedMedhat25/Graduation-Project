@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 class EmotionResult {
   final String emotion;
+  final String category;
   final double confidence;
   final Map<String, double> allEmotions;
   final DateTime timestamp;
@@ -12,6 +13,7 @@ class EmotionResult {
 
   const EmotionResult({
     required this.emotion,
+    this.category = 'neutral',
     required this.confidence,
     required this.allEmotions,
     required this.timestamp,
@@ -56,6 +58,7 @@ class EmotionResult {
   factory EmotionResult.fromJson(Map<String, dynamic> json, String fallbackType) {
     return EmotionResult(
       emotion: (json['emotion'] ?? 'neutral').toString().toLowerCase(),
+      category: (json['category'] ?? 'neutral').toString().toLowerCase(),
       confidence: _normalizeConfidence(json['confidence']),
       allEmotions: _parseEmotionMap(
         json['all_emotions'] ?? json['allEmotions'],
@@ -70,6 +73,7 @@ class EmotionResult {
 
   factory EmotionResult.fromTextApi(Map<String, dynamic> rawJson) {
     try {
+      // The provided structure is the unwrapped AI response
       final json = rawJson['result'] is Map
           ? Map<String, dynamic>.from(rawJson['result'] as Map)
           : Map<String, dynamic>.from(rawJson);
@@ -78,24 +82,31 @@ class EmotionResult {
 
       final allEmotions = <String, double>{};
 
+      // 1. Extract from combined_results (highest priority for multi-modal/merged results)
       _extractEmotions(json['combined_results'], allEmotions);
+      
+      // 2. Extract from full_text_analysis probabilities
       _extractEmotions(_nested(json, 'full_text_analysis', 'probabilities'), allEmotions);
+      
+      // 3. Extract from raw probabilities or all_emotions (fallbacks)
       _extractEmotions(json['probabilities'], allEmotions);
       _extractEmotions(json['all_emotions'], allEmotions);
 
-      final dominant = _extractDominant(json, [
-        'combined_final_emotion',
-        'dominant',
-        'emotion',
-      ], nested: [
-        ['full_text_analysis', 'dominant']
-      ]);
+      // --- Determine Dominant Emotion ---
+      // New structure has combined_final_emotion and full_text_analysis.dominant
+      final dominantSource = json['combined_final_emotion'] ?? 
+                            (json['full_text_analysis'] is Map ? json['full_text_analysis']['dominant'] : null) ??
+                            json['dominant'] ?? 
+                            {};
+      
+      final dominantMap = Map<String, dynamic>.from(dominantSource is Map ? dominantSource : {});
 
-      String emotion = dominant['label'] ?? dominant['emotion'] ?? '';
+      String emotion = (dominantMap['label'] ?? dominantMap['emotion'] ?? '').toString();
       double confidence = _normalizeConfidence(
-        dominant['confidence'] ?? dominant['confidence_percent'],
+        dominantMap['confidence'] ?? dominantMap['confidence_percent'],
       );
 
+      // --- Fallback to highest in map if dominant is missing ---
       if ((emotion.isEmpty || confidence == 0.0) && allEmotions.isNotEmpty) {
         final top = allEmotions.entries.reduce((a, b) => a.value >= b.value ? a : b);
         emotion = top.key;
@@ -106,12 +117,13 @@ class EmotionResult {
         emotion = (json['emotion'] ?? json['label'] ?? 'neutral').toString().toLowerCase();
       }
 
-      if (allEmotions.isEmpty) {
-        allEmotions[emotion] = confidence;
+      if (allEmotions.isEmpty && emotion.isNotEmpty) {
+        allEmotions[emotion.toLowerCase()] = confidence;
       }
 
       return EmotionResult(
         emotion: emotion.isEmpty ? 'neutral' : emotion.toLowerCase(),
+        category: (dominantMap['category'] ?? 'neutral').toString().toLowerCase(),
         confidence: confidence,
         allEmotions: allEmotions,
         timestamp: parseCairoTime(json['timestamp']),
@@ -179,6 +191,7 @@ class EmotionResult {
 
       return EmotionResult(
         emotion: emotion.isEmpty ? 'neutral' : emotion.toLowerCase(),
+        category: (dominant['category'] ?? 'neutral').toString().toLowerCase(),
         confidence: confidence,
         allEmotions: allEmotions,
         timestamp: parseCairoTime(json['timestamp']),
@@ -281,6 +294,7 @@ class EmotionResult {
 
   Map<String, dynamic> toJson() => {
     'emotion': emotion,
+    'category': category,
     'confidence': confidence,
     'all_emotions': allEmotions,
     'timestamp': timestamp.toIso8601String(),

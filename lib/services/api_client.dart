@@ -203,6 +203,30 @@ class ApiClient {
       return ApiResponse.error(e.toString());
     }
   }
+
+  /// Direct call to an absolute URL without prepending baseUrl
+  Future<ApiResponse> postRaw(
+    String url, {
+    Map<String, dynamic>? body,
+  }) async {
+    try {
+      final uri = Uri.parse(url);
+      debugPrint('🚀 POST RAW: $uri');
+      
+      final response = await http
+          .post(
+            uri,
+            headers: await _headers(),
+            body: body != null ? jsonEncode(body) : null,
+          )
+          .timeout(_timeout);
+
+      return _handle(response, uri);
+    } catch (e) {
+      debugPrint('❌ API Error (POST RAW): $e');
+      return ApiResponse.error(e.toString());
+    }
+  }
 }
 
 class ApiResponse {

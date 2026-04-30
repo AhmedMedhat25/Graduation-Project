@@ -1,0 +1,2 @@
+  textApiUrl: "https://graduation-project-website-eight.vercel.app/text",
+  audioApiUrl: "https://graduation-project-website-eight.vercel.app/audio",

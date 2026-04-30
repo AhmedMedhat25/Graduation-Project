@@ -68,9 +68,6 @@ class _EmotionAppState extends State<EmotionApp> {
     return ValueListenableBuilder<String>(
       valueListenable: ThemeService.themeNotifier,
       builder: (context, themeName, child) {
-        final isDark = themeName.toLowerCase() == 'dark';
-        final themeMode = isDark ? ThemeMode.dark : ThemeMode.light;
-
         return MaterialApp(
           title: 'EMOTRA',
           debugShowCheckedModeBanner: false,
