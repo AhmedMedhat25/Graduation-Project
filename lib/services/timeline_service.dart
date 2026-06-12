@@ -213,11 +213,11 @@ class TimelineService {
       debugPrint('⚠️ Local delete failed: $e');
     }
 
-    // 2. If logged in, also delete from API (using database integer analysisId)
+    // 2. If logged in, also delete from API (using UUID clientId)
     if (isLoggedIn) {
-      final id = result.analysisId;
-      if (id == null) {
-        debugPrint('⚠️ Logged in but no analysisId to delete from API');
+      final id = result.clientId;
+      if (id == null || id.isEmpty) {
+        debugPrint('⚠️ Logged in but no clientId to delete from API');
         refreshNotifier.value++;
         return true; // Return true as it is removed locally
       }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -74,21 +75,25 @@ class AudioEmotionService {
       );
 
       // ============================================================
-      // 💾 PHASE 2: Save to Main Backend
+      // 💾 PHASE 2: Save to Main Backend (multipart/form-data)
       // ============================================================
-      debugPrint('🎵 Phase 2: Saving to backend...');
+      debugPrint('🎵 Phase 2: Saving to backend via multipart...');
 
-      final saveResponse = await _api.post(
+      final saveResponse = await _api.postMultipart(
         '/analysis/audio',
-        body: {
+        file: audioFile,
+        fileField: 'AudioFile',
+        fields: {
           'client_id': clientId,
-          'result': aiResult,
+          'Request': jsonEncode({
+            'client_id': clientId,
+            'result': aiResult,
+          }),
         },
       );
 
       if (!saveResponse.isSuccess) {
         // Non-fatal: log with reason but continue with local save.
-        // Report to your crash reporter here in production (e.g. Sentry).
         debugPrint(
           '⚠️ Backend save failed (continuing locally): '
               '${saveResponse.message}',

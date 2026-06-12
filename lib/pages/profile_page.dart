@@ -13,6 +13,7 @@ import '../widgets/shared_widgets.dart';
 import 'forgot_password_page.dart';
 import 'login_page.dart';
 import 'reset_password_page.dart';
+import 'support_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -402,6 +403,16 @@ class _ProfilePageState extends State<ProfilePage> {
                               },
                               activeTrackColor: AppColors.primary,
                             ),
+                          ),
+                          _SettingsItem(
+                            icon: Icons.contact_support_outlined,
+                            label: 'Contact Support',
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                AppRoute.slide(const SupportPage()),
+                              );
+                            },
                           ),
                           _SettingsItem(
                             icon: Icons.delete_outline_rounded,

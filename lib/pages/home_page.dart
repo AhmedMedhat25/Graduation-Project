@@ -682,14 +682,14 @@ class _DashboardTabState extends State<_DashboardTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '${_timeGreeting()}, $_userName ${_greetingEmoji()}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.headlineMedium?.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.4,
+              MarqueeWidget(
+                child: Text(
+                  '${_timeGreeting()}, $_userName ${_greetingEmoji()}',
+                  style: textTheme.headlineMedium?.copyWith(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
@@ -1794,4 +1794,86 @@ class _AnalysisType {
     required this.color,
     required this.page,
   });
+}
+
+class MarqueeWidget extends StatefulWidget {
+  final Widget child;
+  final Duration animationDuration;
+  final Duration pauseDuration;
+  final Duration backDuration;
+
+  const MarqueeWidget({
+    super.key,
+    required this.child,
+    this.animationDuration = const Duration(seconds: 8),
+    this.pauseDuration = const Duration(seconds: 1),
+    this.backDuration = const Duration(milliseconds: 800),
+  });
+
+  @override
+  State<MarqueeWidget> createState() => _MarqueeWidgetState();
+}
+
+class _MarqueeWidgetState extends State<MarqueeWidget> {
+  late ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startScrolling());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startScrolling() async {
+    if (!mounted) return;
+    await Future.delayed(widget.pauseDuration);
+
+    while (mounted) {
+      if (_scrollController.hasClients) {
+        final maxScroll = _scrollController.position.maxScrollExtent;
+        if (maxScroll > 0) {
+          // Scroll to the end
+          await _scrollController.animateTo(
+            maxScroll,
+            duration: widget.animationDuration,
+            curve: Curves.linear,
+          );
+
+          await Future.delayed(widget.pauseDuration);
+
+          if (!mounted) return;
+
+          // Scroll back to the start
+          await _scrollController.animateTo(
+            0.0,
+            duration: widget.backDuration,
+            curve: Curves.easeInOut,
+          );
+
+          await Future.delayed(widget.pauseDuration);
+        } else {
+          // If no scroll is needed, wait a bit before checking again
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      } else {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      controller: _scrollController,
+      physics: const NeverScrollableScrollPhysics(), // Prevent manual dragging
+      child: widget.child,
+    );
+  }
 }
